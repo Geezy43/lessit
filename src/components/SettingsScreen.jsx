@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { CATEGORIES } from '../data/meals'
 
-export default function SettingsScreen({ settings, onSave }) {
+export default function SettingsScreen({ settings, onSave, onReset }) {
   const [local, setLocal] = useState({ ...settings })
   const [saved, setSaved] = useState(false)
 
@@ -110,6 +110,19 @@ export default function SettingsScreen({ settings, onSave }) {
         <button className="btn-primary" onClick={save} style={{ marginTop: 4 }}>
           {saved ? '✓ Saved!' : 'Save changes'}
         </button>
+
+        {/* Reset */}
+        <button
+          onClick={onReset}
+          style={{
+            background: 'none', border: '1.5px solid #F0E8E0',
+            borderRadius: 16, padding: '14px', width: '100%',
+            fontFamily: 'Outfit', fontSize: 14, fontWeight: 500,
+            color: '#E84040', cursor: 'pointer', marginTop: 4,
+          }}
+        >
+          Reset & restart onboarding
+        </button>
       </div>
     </div>
   )
@@ -149,7 +162,7 @@ const inputStyle = {
   fontFamily: 'Outfit',
   fontSize: 15,
   color: '#1A1A1A',
-  background: '#FEFAF6',
+  background: '#FFFFFF',
   outline: 'none',
 }
 

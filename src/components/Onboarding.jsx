@@ -1,274 +1,350 @@
-import { useState } from 'react'
-import { CATEGORIES } from '../data/meals'
+import { useState, useRef } from 'react'
 
-const STEPS = 4
+const BUDGET_OPTIONS = [
+  { label: 'On a budget',   sub: '₦1,500 – ₦3,000', min: 1500, max: 3000 },
+  { label: 'No complaints', sub: '₦3,000 – ₦6,000', min: 3000, max: 6000 },
+  { label: 'Flex',          sub: '₦6,000+',          min: 6000, max: 99999 },
+]
+
+const DYK_CARDS = [
+  {
+    emoji: '⚡',
+    fact: 'A calorie is just energy your food gives you.',
+    detail: 'Your body literally runs on it — like fuel in a car.',
+  },
+  {
+    emoji: '🔥',
+    fact: 'Walking 30 mins burns ~150 kcal.\nSleeping 8 hours burns ~500 kcal.',
+    detail: 'Yes, you burn energy doing absolutely nothing.',
+  },
+  {
+    emoji: '🍛',
+    fact: 'One plate of jollof rice = ~600 kcal.',
+    detail: "That's more than an hour of jogging. So yeah, what you eat matters.",
+  },
+]
 
 export default function Onboarding({ onComplete }) {
-  const [step, setStep] = useState(0)
-  const [data, setData] = useState({
-    name: '',
-    preferredCategories: [],
-    watchingCalories: false,
-    calorieTarget: 2000,
-    defaultBudget: 3000,
-  })
+  // phase: 'splash' | 'dyk' | 'name' | 'budget' | 'transition'
+  const [phase, setPhase] = useState('splash')
+  const [dykIndex, setDykIndex] = useState(0)
+  const [name, setName] = useState('')
+  const [budget, setBudget] = useState(null)
 
-  const next = () => {
-    if (step < STEPS - 1) setStep(s => s + 1)
-    else onComplete(data)
+  // DYK swipe state
+  const dragStart = useRef({ x: 0, dragging: false })
+  const [dykDelta, setDykDelta] = useState(0)
+  const [dykFlying, setDykFlying] = useState(false)
+
+  const handleDykPointerDown = (e) => {
+    dragStart.current = { x: e.clientX, dragging: true }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const handleDykPointerMove = (e) => {
+    if (!dragStart.current.dragging) return
+    setDykDelta(e.clientX - dragStart.current.x)
+  }
+  const handleDykPointerUp = () => {
+    if (!dragStart.current.dragging) return
+    dragStart.current.dragging = false
+    if (Math.abs(dykDelta) > 80) {
+      advanceDyk()
+    } else {
+      setDykDelta(0)
+    }
   }
 
-  const back = () => setStep(s => s - 1)
-
-  const canProceed = () => {
-    if (step === 0) return data.name.trim().length > 0
-    return true
+  const advanceDyk = () => {
+    setDykFlying(true)
+    setTimeout(() => {
+      if (dykIndex < DYK_CARDS.length - 1) {
+        setDykIndex(i => i + 1)
+      } else {
+        setPhase('name')
+      }
+      setDykDelta(0)
+      setDykFlying(false)
+    }, 280)
   }
 
-  return (
-    <div style={{
-      flex: 1, display: 'flex', flexDirection: 'column',
-      background: 'var(--bg)', overflow: 'hidden',
-    }}>
-      {/* Progress bar */}
-      <div style={{ padding: '20px 24px 0' }}>
-        {step > 0 && (
-          <button onClick={back} className="btn-ghost" style={{ padding: '0 0 16px', color: '#8C8C8C', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M19 12H5M12 5l-7 7 7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Back
+  const handleComplete = () => {
+    onComplete({
+      name: name.trim(),
+      budgetMin: budget.min,
+      budgetMax: budget.max,
+      defaultBudget: budget.max,
+      preferredCategories: [],
+      watchingCalories: false,
+      calorieTarget: 2000,
+    })
+  }
+
+  // ── Splash ────────────────────────────────────────────────────────────────
+  if (phase === 'splash') {
+    return (
+      <Screen>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, padding: '0 32px' }}>
+          <BurbAvatar size={88} />
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={styles.h1}>Hey, I'm Burb.</h1>
+            <p style={{ ...styles.body, marginTop: 8, color: '#8C8C8C', lineHeight: 1.7 }}>
+              I help you figure out what to eat.
+            </p>
+          </div>
+        </div>
+        <Footer>
+          <button className="btn-primary" onClick={() => setPhase('dyk')}>
+            Let's go
           </button>
-        )}
-        <div style={{ display: 'flex', gap: 6 }}>
-          {Array.from({ length: STEPS }).map((_, i) => (
-            <div key={i} style={{
-              flex: 1, height: 4, borderRadius: 2,
-              background: i <= step ? 'var(--primary)' : '#E8E0D8',
-              transition: 'background 0.3s',
+        </Footer>
+      </Screen>
+    )
+  }
+
+  // ── DYK Cards ─────────────────────────────────────────────────────────────
+  if (phase === 'dyk') {
+    const card = DYK_CARDS[dykIndex]
+    const rotate = dykFlying ? (dykDelta >= 0 ? 20 : -20) : dykDelta * 0.06
+    const tx = dykFlying ? (dykDelta >= 0 ? 600 : -600) : dykDelta
+
+    return (
+      <Screen>
+        {/* Header */}
+        <div style={{ padding: '24px 24px 0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <BurbLabel />
+          <div style={{ display: 'flex', gap: 6 }}>
+            {DYK_CARDS.map((_, i) => (
+              <div key={i} style={{
+                width: i === dykIndex ? 20 : 8, height: 8, borderRadius: 4,
+                background: i <= dykIndex ? '#E8713A' : '#E8E0D8',
+                transition: 'all 0.3s',
+              }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Card area */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '24px 24px 0', position: 'relative' }}>
+          {/* Background cards for depth */}
+          {[2, 1].map(offset => (
+            <div key={offset} style={{
+              position: 'absolute',
+              width: '100%',
+              height: 320,
+              background: '#fff',
+              borderRadius: 28,
+              boxShadow: '0 4px 20px rgba(0,0,0,0.06)',
+              transform: `translateY(${offset * 10}px) scale(${1 - offset * 0.04})`,
             }} />
           ))}
+
+          {/* Active DYK card */}
+          <div
+            onPointerDown={handleDykPointerDown}
+            onPointerMove={handleDykPointerMove}
+            onPointerUp={handleDykPointerUp}
+            style={{
+              position: 'relative', zIndex: 3,
+              width: '100%', height: 320,
+              background: '#fff',
+              borderRadius: 28,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+              display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center',
+              padding: '32px 28px',
+              gap: 20,
+              cursor: 'grab',
+              userSelect: 'none',
+              touchAction: 'none',
+              transform: `translateX(${tx}px) rotate(${rotate}deg)`,
+              transition: dragStart.current.dragging ? 'none' : 'transform 0.3s cubic-bezier(0.25,0.46,0.45,0.94)',
+            }}
+          >
+            <div style={{
+              width: 72, height: 72, borderRadius: 20,
+              background: 'linear-gradient(135deg, #E8713A, #F5A07A)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 36,
+            }}>
+              {card.emoji}
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 18, color: '#1A1A1A', lineHeight: 1.5, whiteSpace: 'pre-line' }}>
+                {card.fact}
+              </p>
+              <p style={{ fontFamily: 'Outfit', fontSize: 14, color: '#8C8C8C', marginTop: 10, lineHeight: 1.6 }}>
+                {card.detail}
+              </p>
+            </div>
+          </div>
+
+          <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C', marginTop: 20 }}>
+            Swipe to continue
+          </p>
         </div>
-      </div>
 
-      {/* Step content */}
-      <div style={{ flex: 1, padding: '32px 24px 24px', overflowY: 'auto' }}>
-        {step === 0 && <StepName data={data} setData={setData} />}
-        {step === 1 && <StepCategories data={data} setData={setData} />}
-        {step === 2 && <StepCalories data={data} setData={setData} />}
-        {step === 3 && <StepBudget data={data} setData={setData} />}
-      </div>
-
-      {/* CTA */}
-      <div style={{ padding: '0 24px 40px' }}>
-        <button className="btn-primary" onClick={next} disabled={!canProceed()} style={{
-          opacity: canProceed() ? 1 : 0.45,
-        }}>
-          {step === STEPS - 1 ? "Let's eat! 🍽️" : 'Continue'}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function StepName({ data, setData }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>👋</div>
-        <h1 style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 28, color: '#1A1A1A', marginBottom: 8 }}>
-          Hey, what do<br />we call you?
-        </h1>
-        <p style={{ fontFamily: 'Outfit', fontSize: 15, color: '#8C8C8C', lineHeight: 1.6 }}>
-          Lessit helps you decide what to eat in under 60 seconds.
-        </p>
-      </div>
-      <input
-        value={data.name}
-        onChange={e => setData(p => ({ ...p, name: e.target.value }))}
-        placeholder="Your name"
-        autoFocus
-        style={{
-          width: '100%', padding: '16px 18px',
-          borderRadius: 16, border: '1.5px solid #E8E0D8',
-          fontFamily: 'Outfit', fontSize: 16, color: '#1A1A1A',
-          background: '#fff', outline: 'none',
-        }}
-        onFocus={e => e.target.style.borderColor = '#E8713A'}
-        onBlur={e => e.target.style.borderColor = '#E8E0D8'}
-      />
-    </div>
-  )
-}
-
-function StepCategories({ data, setData }) {
-  const toggle = (cat) => {
-    setData(prev => ({
-      ...prev,
-      preferredCategories: prev.preferredCategories.includes(cat)
-        ? prev.preferredCategories.filter(c => c !== cat)
-        : [...prev.preferredCategories, cat],
-    }))
+        <Footer>
+          <button className="btn-primary" onClick={advanceDyk}>
+            {dykIndex < DYK_CARDS.length - 1 ? 'Got it →' : 'Let\'s do this →'}
+          </button>
+        </Footer>
+      </Screen>
+    )
   }
 
-  const categoryEmojis = {
-    'Rice Dish': '🍛',
-    'Swallow': '🫙',
-    'Soup': '🍲',
-    'Grilled Protein': '🍢',
-    'Beans & Porridge': '🫘',
-    'Street Food': '🌽',
-    'Breakfast': '🍳',
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🍜</div>
-        <h1 style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 28, color: '#1A1A1A', marginBottom: 8 }}>
-          What do you<br />usually eat?
-        </h1>
-        <p style={{ fontFamily: 'Outfit', fontSize: 15, color: '#8C8C8C' }}>
-          Select all that apply. We'll show these first.
-        </p>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {CATEGORIES.map(cat => {
-          const active = data.preferredCategories.includes(cat)
-          return (
-            <button
-              key={cat}
-              onClick={() => toggle(cat)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 14,
-                padding: '14px 18px', borderRadius: 16,
-                border: `1.5px solid ${active ? '#E8713A' : '#E8E0D8'}`,
-                background: active ? '#FFF4EE' : '#fff',
-                cursor: 'pointer', textAlign: 'left',
-                transition: 'all 0.15s',
-              }}
-            >
-              <span style={{ fontSize: 24 }}>{categoryEmojis[cat]}</span>
-              <span style={{ fontFamily: 'Outfit', fontSize: 15, fontWeight: active ? 600 : 400, color: active ? '#E8713A' : '#1A1A1A' }}>
-                {cat}
-              </span>
-              {active && <span style={{ marginLeft: 'auto', color: '#E8713A', fontSize: 18 }}>✓</span>}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function StepCalories({ data, setData }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>🔥</div>
-        <h1 style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 28, color: '#1A1A1A', marginBottom: 8 }}>
-          Watching<br />your calories?
-        </h1>
-        <p style={{ fontFamily: 'Outfit', fontSize: 15, color: '#8C8C8C', lineHeight: 1.6 }}>
-          We'll show calorie info on every meal. No judgement either way.
-        </p>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {[
-          { val: true,  label: 'Yes, show me calories',    sub: 'I track what I eat',       emoji: '📊' },
-          { val: false, label: 'No, just show me food',    sub: 'I eat what I want',         emoji: '😋' },
-        ].map(opt => {
-          const active = data.watchingCalories === opt.val
-          return (
-            <button
-              key={String(opt.val)}
-              onClick={() => setData(p => ({ ...p, watchingCalories: opt.val }))}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 14,
-                padding: '18px', borderRadius: 16,
-                border: `1.5px solid ${active ? '#E8713A' : '#E8E0D8'}`,
-                background: active ? '#FFF4EE' : '#fff',
-                cursor: 'pointer', textAlign: 'left',
-                transition: 'all 0.15s',
-              }}
-            >
-              <span style={{ fontSize: 28 }}>{opt.emoji}</span>
-              <div>
-                <p style={{ fontFamily: 'Outfit', fontSize: 15, fontWeight: active ? 600 : 500, color: active ? '#E8713A' : '#1A1A1A' }}>
-                  {opt.label}
-                </p>
-                <p style={{ fontFamily: 'Outfit', fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{opt.sub}</p>
-              </div>
-            </button>
-          )
-        })}
-      </div>
-
-      {data.watchingCalories && (
-        <div style={{ background: '#fff', borderRadius: 16, padding: '20px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-            <p style={{ fontFamily: 'Outfit', fontSize: 14, fontWeight: 500, color: '#1A1A1A' }}>Daily target</p>
-            <span style={{ fontFamily: 'Outfit', fontSize: 14, fontWeight: 600, color: '#E8713A' }}>{data.calorieTarget} kcal</span>
+  // ── Name ──────────────────────────────────────────────────────────────────
+  if (phase === 'name') {
+    return (
+      <Screen>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '0 24px', gap: 32 }}>
+          <BurbLabel />
+          <div>
+            <h1 style={styles.h1}>What should I<br />call you?</h1>
           </div>
           <input
-            type="range" min="1200" max="4000" step="100"
-            value={data.calorieTarget}
-            onChange={e => setData(p => ({ ...p, calorieTarget: Number(e.target.value) }))}
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Your name"
+            autoFocus
+            style={{
+              width: '100%', padding: '18px 20px',
+              borderRadius: 16, border: '1.5px solid #E8E0D8',
+              fontFamily: 'Outfit', fontSize: 18, color: '#1A1A1A',
+              background: '#fff', outline: 'none',
+            }}
+            onFocus={e => e.target.style.borderColor = '#E8713A'}
+            onBlur={e => e.target.style.borderColor = '#E8E0D8'}
+            onKeyDown={e => e.key === 'Enter' && name.trim() && setPhase('budget')}
           />
         </div>
-      )}
+        <Footer>
+          <button
+            className="btn-primary"
+            onClick={() => setPhase('budget')}
+            disabled={!name.trim()}
+            style={{ opacity: name.trim() ? 1 : 0.4 }}
+          >
+            Continue
+          </button>
+        </Footer>
+      </Screen>
+    )
+  }
+
+  // ── Budget ────────────────────────────────────────────────────────────────
+  if (phase === 'budget') {
+    return (
+      <Screen>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '0 24px', gap: 32 }}>
+          <BurbLabel />
+          <div>
+            <h1 style={styles.h1}>How much are we<br />working with?</h1>
+            <p style={{ ...styles.body, color: '#8C8C8C', marginTop: 8 }}>Per meal</p>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {BUDGET_OPTIONS.map(opt => {
+              const active = budget?.label === opt.label
+              return (
+                <button
+                  key={opt.label}
+                  onClick={() => setBudget(opt)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '18px 20px', borderRadius: 16,
+                    border: `1.5px solid ${active ? '#E8713A' : '#E8E0D8'}`,
+                    background: active ? '#FFF4EE' : '#fff',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                    WebkitTapHighlightColor: 'transparent',
+                  }}
+                >
+                  <span style={{ fontFamily: 'Outfit', fontSize: 16, fontWeight: active ? 600 : 500, color: active ? '#E8713A' : '#1A1A1A' }}>
+                    {opt.label}
+                  </span>
+                  <span style={{ fontFamily: 'Outfit', fontSize: 14, color: '#8C8C8C' }}>
+                    {opt.sub}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <Footer>
+          <button
+            className="btn-primary"
+            onClick={() => setPhase('transition')}
+            disabled={!budget}
+            style={{ opacity: budget ? 1 : 0.4 }}
+          >
+            Continue
+          </button>
+        </Footer>
+      </Screen>
+    )
+  }
+
+  // ── Transition ────────────────────────────────────────────────────────────
+  if (phase === 'transition') {
+    return (
+      <Screen>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, padding: '0 32px' }}>
+          <BurbAvatar size={88} />
+          <div style={{ textAlign: 'center' }}>
+            <h1 style={styles.h1}>Alright {name},<br />let's find your<br />next meal!</h1>
+          </div>
+        </div>
+        <Footer>
+          <button className="btn-primary" onClick={handleComplete}>
+            Let's eat 🍽️
+          </button>
+        </Footer>
+      </Screen>
+    )
+  }
+
+  return null
+}
+
+// ── Shared sub-components ─────────────────────────────────────────────────────
+function Screen({ children }) {
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
+      {children}
     </div>
   )
 }
 
-function StepBudget({ data, setData }) {
+function Footer({ children }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div>
-        <div style={{ fontSize: 56, marginBottom: 16 }}>💰</div>
-        <h1 style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 28, color: '#1A1A1A', marginBottom: 8 }}>
-          What's your<br />usual budget?
-        </h1>
-        <p style={{ fontFamily: 'Outfit', fontSize: 15, color: '#8C8C8C', lineHeight: 1.6 }}>
-          We'll filter out meals above this. You can always change it.
-        </p>
-      </div>
-
-      <div style={{ background: '#fff', borderRadius: 20, padding: '24px', boxShadow: '0 2px 12px rgba(0,0,0,0.06)' }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <span style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 40, color: '#E8713A' }}>
-            ₦{data.defaultBudget.toLocaleString()}
-          </span>
-          <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C', marginTop: 4 }}>per meal</p>
-        </div>
-        <input
-          type="range" min="500" max="10000" step="500"
-          value={data.defaultBudget}
-          onChange={e => setData(p => ({ ...p, defaultBudget: Number(e.target.value) }))}
-        />
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-          <span style={{ fontFamily: 'Outfit', fontSize: 12, color: '#8C8C8C' }}>₦500</span>
-          <span style={{ fontFamily: 'Outfit', fontSize: 12, color: '#8C8C8C' }}>₦10,000</span>
-        </div>
-      </div>
-
-      {/* Budget tier hint */}
-      <div style={{ background: '#F5E6D3', borderRadius: 16, padding: '16px 18px' }}>
-        <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C', lineHeight: 1.6 }}>
-          💡 <strong style={{ color: '#1A1A1A' }}>
-            {data.defaultBudget <= 1000 ? 'Budget eater' :
-             data.defaultBudget <= 3000 ? 'Everyday meals' :
-             data.defaultBudget <= 6000 ? 'Treat yourself' : 'No limits 👑'}
-          </strong>
-          {' — '}
-          {data.defaultBudget <= 1000 ? 'Street food & quick bites in range.' :
-           data.defaultBudget <= 3000 ? 'Most bukas and local spots covered.' :
-           data.defaultBudget <= 6000 ? 'Restaurants and premium spots open up.' :
-           'The whole menu is yours.'}
-        </p>
-      </div>
+    <div style={{ padding: '16px 24px 40px', flexShrink: 0 }}>
+      {children}
     </div>
   )
+}
+
+function BurbAvatar({ size = 56 }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: size * 0.28,
+      background: 'linear-gradient(135deg, #E8713A 0%, #F5A07A 100%)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size * 0.45,
+      boxShadow: '0 4px 20px rgba(232,113,58,0.3)',
+    }}>
+      🍽️
+    </div>
+  )
+}
+
+function BurbLabel() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <BurbAvatar size={32} />
+      <span style={{ fontFamily: 'Outfit', fontSize: 13, fontWeight: 600, color: '#E8713A' }}>Burb</span>
+    </div>
+  )
+}
+
+const styles = {
+  h1: { fontFamily: 'Outfit', fontWeight: 700, fontSize: 32, color: '#1A1A1A', lineHeight: 1.2 },
+  body: { fontFamily: 'Outfit', fontSize: 15, color: '#1A1A1A', lineHeight: 1.6 },
 }

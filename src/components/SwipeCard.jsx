@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 
 const SWIPE_THRESHOLD = 100
 
-export default function SwipeCard({ meal, stackIndex, isTop, onSwipe, onTap }) {
+export default function SwipeCard({ meal, stackIndex, isTop, onSwipe, onTap, showBurbChip }) {
   const dragStart = useRef({ x: 0, dragging: false })
   const [delta, setDelta] = useState(0)
   const [flyDir, setFlyDir] = useState(null)
@@ -111,6 +111,27 @@ export default function SwipeCard({ meal, stackIndex, isTop, onSwipe, onTap }) {
               {meal.category}
             </span>
           </div>
+
+          {/* Burb chip — first card only */}
+          {showBurbChip && isTop && (
+            <div style={{
+              position: 'absolute',
+              bottom: 16, left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(26,26,26,0.85)',
+              backdropFilter: 'blur(8px)',
+              borderRadius: 100,
+              padding: '8px 16px',
+              display: 'flex', alignItems: 'center', gap: 8,
+              whiteSpace: 'nowrap',
+              animation: 'fadeIn 0.4s ease',
+            }}>
+              <span style={{ fontSize: 14 }}>🍽️</span>
+              <span style={{ fontFamily: 'Outfit', fontSize: 12, fontWeight: 500, color: '#fff' }}>
+                Swipe right if you'd eat it. Left if not.
+              </span>
+            </div>
+          )}
 
           {/* YUM overlay */}
           {showYum && (

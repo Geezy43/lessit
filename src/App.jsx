@@ -1,21 +1,26 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { meals as allMeals, filterMeals, shuffleMeals } from './data/meals'
 import SwipeCard from './components/SwipeCard'
 import MealDetail from './components/MealDetail'
-import MatchScreen from './components/MatchScreen'
 import FilterSheet from './components/FilterSheet'
 import HistoryScreen from './components/HistoryScreen'
 import SettingsScreen from './components/SettingsScreen'
+import MyPicksScreen from './components/MyPicksScreen'
+import EndOfSession from './components/EndOfSession'
+import BurbToast from './components/BurbToast'
 import BottomNav from './components/BottomNav'
 import Onboarding from './components/Onboarding'
-import { PairedSessionOverlay } from './components/PairedSession'
+
+const SESSION_SIZE = 15
 
 const DEFAULT_SETTINGS = {
   name: '',
-  defaultBudget: 3000,
-  calorieTarget: 2000,
-  watchingCalories: false,
+  budgetMin: 0,
+  budgetMax: 99999,
+  defaultBudget: 99999,
   preferredCategories: [],
+  watchingCalories: false,
+  calorieTarget: 2000,
 }
 
 const DEFAULT_FILTERS = { budget: 0, calories: 0, categories: [], moods: [] }
@@ -25,42 +30,72 @@ function load(key, fallback) {
   catch { return fallback }
 }
 
+function todayStr() {
+  return new Date().toISOString().slice(0, 10)
+}
+
 export default function App() {
-  const [onboarded, setOnboarded]   = useState(() => load('lessit_onboarded', false))
-  const [settings, setSettings]     = useState(() => load('lessit_settings', DEFAULT_SETTINGS))
-  const [history, setHistory]       = useState(() => load('lessit_history', []))
-  const [filters, setFilters]       = useState(DEFAULT_FILTERS)
+  const [onboarded, setOnboarded]     = useState(() => load('lessit_onboarded', false))
+  const [settings, setSettings]       = useState(() => load('lessit_settings', DEFAULT_SETTINGS))
+  const [history, setHistory]         = useState(() => load('lessit_history', []))
+  const [filters, setFilters]         = useState(DEFAULT_FILTERS)
 
-  const [tab, setTab]               = useState('home')
-  const [showFilter, setShowFilter] = useState(false)
+  const [tab, setTab]                 = useState('home')
+  const [showFilter, setShowFilter]   = useState(false)
   const [selectedMeal, setSelectedMeal] = useState(null)
-  const [matchedMeal, setMatchedMeal]   = useState(null)
 
-  const [deck, setDeck]             = useState([])
-  const [deckIndex, setDeckIndex]   = useState(0)
-  const [picks, setPicks]           = useState([])
-  const [rightSwipeCount, setRightSwipeCount] = useState(0)
-  const [showPaired, setShowPaired] = useState(false)
+  // Deck
+  const [deck, setDeck]               = useState([])
+  const [seenIds, setSeenIds]         = useState(new Set())
+  const [deckIndex, setDeckIndex]     = useState(0)
+  const [picks, setPicks]             = useState([])
+  const [swipeHistory, setSwipeHistory] = useState([]) // for undo
+  const [sessionDone, setSessionDone] = useState(false)
 
-  // Persist history & settings
+  // Burb chip (first card only)
+  const [burbChipDismissed, setBurbChipDismissed] = useState(() => load('lessit_burb_chip_done', false))
+
+  // Streak toasts
+  const [toast, setToast]             = useState(null)
+  const nahStreak                     = useRef(0)
+  const yumStreak                     = useRef(0)
+
+  // Session persistence — next-day prompt
+  const [showDayPrompt, setShowDayPrompt] = useState(false)
+  const lastSessionDate = load('lessit_last_session_date', null)
+
+  // Persist
   useEffect(() => { localStorage.setItem('lessit_history', JSON.stringify(history)) }, [history])
   useEffect(() => { localStorage.setItem('lessit_settings', JSON.stringify(settings)) }, [settings])
   useEffect(() => { localStorage.setItem('lessit_onboarded', JSON.stringify(onboarded)) }, [onboarded])
+  useEffect(() => { localStorage.setItem('lessit_burb_chip_done', JSON.stringify(burbChipDismissed)) }, [burbChipDismissed])
 
-  // Build deck whenever filters change
+  // Show next-day prompt if returning the following day
   useEffect(() => {
+    if (onboarded && lastSessionDate && lastSessionDate !== todayStr()) {
+      setShowDayPrompt(true)
+    }
+  }, [onboarded])
+
+  // Build deck
+  const buildDeck = useCallback((excludeIds = new Set()) => {
     const filtered = filterMeals(allMeals, {
       ...filters,
       budget: filters.budget || settings.defaultBudget || 0,
     })
+    const unseen = filtered.filter(m => !excludeIds.has(m.id))
+    const pool = unseen.length >= SESSION_SIZE ? unseen : filtered // fallback if too few unseen
+    const preferred = pool.filter(m => settings.preferredCategories.includes(m.category))
+    const rest = pool.filter(m => !settings.preferredCategories.includes(m.category))
+    return [...shuffleMeals(preferred), ...shuffleMeals(rest)].slice(0, SESSION_SIZE * 2) // buffer
+  }, [filters, settings.defaultBudget, settings.preferredCategories])
 
-    // Put preferred categories first
-    const preferred = filtered.filter(m => settings.preferredCategories.includes(m.category))
-    const rest = filtered.filter(m => !settings.preferredCategories.includes(m.category))
-    setDeck([...shuffleMeals(preferred), ...shuffleMeals(rest)])
+  useEffect(() => {
+    setDeck(buildDeck(new Set()))
     setDeckIndex(0)
     setPicks([])
-    setRightSwipeCount(0)
+    setSwipeHistory([])
+    setSessionDone(false)
   }, [filters, settings.defaultBudget, settings.preferredCategories])
 
   const visibleCards = useMemo(() => {
@@ -68,117 +103,171 @@ export default function App() {
     return deck.slice(deckIndex, deckIndex + 3)
   }, [deck, deckIndex])
 
+  const swipeCount = deckIndex // how many swipes done this session
+
   const handleSwipe = useCallback((direction, meal) => {
+    // Dismiss Burb chip after first swipe
+    if (!burbChipDismissed) setBurbChipDismissed(true)
+
+    // Track for undo
+    setSwipeHistory(prev => [...prev, { direction, meal, index: deckIndex }])
+
     if (direction === 'right') {
       setPicks(prev => [...prev, meal])
-      const newCount = rightSwipeCount + 1
-      setRightSwipeCount(newCount)
-      if (newCount % 3 === 0) {
-        setTimeout(() => setMatchedMeal(meal), 100)
+      nahStreak.current = 0
+      yumStreak.current += 1
+      if (yumStreak.current === 3) {
+        setToast("You're hungry hungry. Noted 😋")
+        yumStreak.current = 0
+      }
+    } else {
+      yumStreak.current = 0
+      nahStreak.current += 1
+      if (nahStreak.current === 3) {
+        setToast('Picky today? No judgment 😏')
+        nahStreak.current = 0
       }
     }
-    setDeckIndex(prev => {
-      const next = prev + 1
-      if (next >= deck.length) {
-        // Reshuffle
-        setDeck(d => shuffleMeals(d))
-        return 0
-      }
-      return next
-    })
-  }, [rightSwipeCount, deck.length])
+
+    const nextIndex = deckIndex + 1
+    // Track seen meal
+    setSeenIds(prev => new Set([...prev, meal.id]))
+
+    if (nextIndex >= SESSION_SIZE || nextIndex >= deck.length) {
+      setSessionDone(true)
+      localStorage.setItem('lessit_last_session_date', todayStr())
+    } else {
+      setDeckIndex(nextIndex)
+    }
+  }, [deckIndex, deck.length, burbChipDismissed])
+
+  const handleUndo = useCallback(() => {
+    if (swipeHistory.length === 0) return
+    const last = swipeHistory[swipeHistory.length - 1]
+    setSwipeHistory(prev => prev.slice(0, -1))
+    setDeckIndex(last.index)
+    if (last.direction === 'right') {
+      setPicks(prev => prev.filter((_, i) => i !== prev.length - 1))
+    }
+    setSessionDone(false)
+  }, [swipeHistory])
 
   const handleConfirm = useCallback((meal) => {
     const entry = { meal, date: new Date().toISOString(), type: 'solo' }
     setHistory(prev => [...prev, entry])
-    setMatchedMeal(null)
     setSelectedMeal(null)
     setTab('history')
   }, [])
 
-  const handlePickAgain = useCallback((meal) => {
-    setSelectedMeal(meal)
-    setTab('home')
-  }, [])
+  const handleSwipeAgain = useCallback(() => {
+    const newDeck = buildDeck(seenIds)
+    setDeck(newDeck)
+    setDeckIndex(0)
+    setPicks([])
+    setSwipeHistory([])
+    setSessionDone(false)
+    nahStreak.current = 0
+    yumStreak.current = 0
+  }, [buildDeck, seenIds])
 
   const handleOnboardingComplete = useCallback((data) => {
     setSettings({ ...DEFAULT_SETTINGS, ...data })
     setOnboarded(true)
+    localStorage.setItem('lessit_last_session_date', todayStr())
   }, [])
 
-  const handleSaveSettings = useCallback((s) => {
-    setSettings(s)
-  }, [])
-
-  const handleApplyFilters = useCallback((f) => {
-    setFilters(f)
-    setShowFilter(false)
-  }, [])
-
+  // ── Onboarding ──────────────────────────────────────────────────────────────
   if (!onboarded) {
     return (
       <div className="app-shell">
-        {/* Splash header */}
-        <div style={{
-          padding: '24px 24px 0',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Logo />
-        </div>
         <Onboarding onComplete={handleOnboardingComplete} />
       </div>
     )
   }
 
+  // ── Main app ────────────────────────────────────────────────────────────────
   return (
     <div className="app-shell">
-      {/* Main tab content */}
-      {tab === 'home' && (
+
+      {/* Next-day prompt */}
+      {showDayPrompt && (
+        <DayPrompt
+          onFresh={() => { setShowDayPrompt(false); handleSwipeAgain() }}
+          onYesterday={() => { setShowDayPrompt(false); setTab('picks') }}
+        />
+      )}
+
+      {/* Tab content */}
+      {tab === 'home' && !sessionDone && (
         <HomeScreen
           meals={visibleCards}
-          picks={picks}
+          deckIndex={deckIndex}
           filters={filters}
           onSwipe={handleSwipe}
           onTap={setSelectedMeal}
           onFilterOpen={() => setShowFilter(true)}
-          onDecideTogether={() => setShowPaired(true)}
+          onUndo={handleUndo}
+          canUndo={swipeHistory.length > 0}
           settings={settings}
           deckEmpty={deck.length === 0}
+          showBurbChip={!burbChipDismissed}
         />
       )}
-      {tab === 'history' && (
-        <HistoryScreen history={history} onPickAgain={handlePickAgain} />
+
+      {tab === 'home' && sessionDone && (
+        <EndOfSession
+          picks={picks}
+          onSwipeAgain={handleSwipeAgain}
+          onConfirm={handleConfirm}
+        />
       )}
+
+      {tab === 'picks' && (
+        <MyPicksScreen picks={picks} onConfirm={handleConfirm} />
+      )}
+
+      {tab === 'history' && (
+        <HistoryScreen
+          history={history}
+          onPickAgain={(meal) => { setSelectedMeal(meal); setTab('home') }}
+        />
+      )}
+
       {tab === 'settings' && (
-        <SettingsScreen settings={settings} onSave={handleSaveSettings} />
+        <SettingsScreen
+          settings={settings}
+          onSave={setSettings}
+          onReset={() => { localStorage.clear(); window.location.reload() }}
+        />
       )}
 
       <BottomNav active={tab} onNavigate={setTab} />
 
       {/* Overlays */}
       {showFilter && (
-        <FilterSheet filters={filters} onApply={handleApplyFilters} onClose={() => setShowFilter(false)} />
-      )}
-      {selectedMeal && (
-        <MealDetail meal={selectedMeal} onClose={() => setSelectedMeal(null)} onConfirm={handleConfirm} />
-      )}
-      {matchedMeal && (
-        <MatchScreen meal={matchedMeal} onConfirm={handleConfirm} onClose={() => setMatchedMeal(null)} />
-      )}
-      {showPaired && (
-        <PairedSessionOverlay
-          meals={deck}
-          onMatch={(meal) => { setMatchedMeal(meal); setShowPaired(false) }}
-          onClose={() => setShowPaired(false)}
+        <FilterSheet
+          filters={filters}
+          onApply={(f) => { setFilters(f); setShowFilter(false) }}
+          onClose={() => setShowFilter(false)}
         />
       )}
+      {selectedMeal && (
+        <MealDetail
+          meal={selectedMeal}
+          onClose={() => setSelectedMeal(null)}
+          onConfirm={handleConfirm}
+        />
+      )}
+
+      {/* Burb streak toast */}
+      <BurbToast message={toast} onDone={() => setToast(null)} />
     </div>
   )
 }
 
-// ── Home Screen ─────────────────────────────────────────────────────────────
+// ── Home Screen ──────────────────────────────────────────────────────────────
 
-function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDecideTogether, settings, deckEmpty }) {
+function HomeScreen({ meals, deckIndex, filters, onSwipe, onTap, onFilterOpen, onUndo, canUndo, settings, deckEmpty, showBurbChip }) {
   const activeFilterCount = (filters.budget > 0 ? 1 : 0) +
     (filters.calories > 0 ? 1 : 0) +
     filters.categories.length + filters.moods.length
@@ -191,55 +280,65 @@ function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDec
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         flexShrink: 0,
       }}>
-        <div>
-          <Logo />
-          <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>
-            {settings.name ? `Hey ${settings.name} 👋` : 'What are we eating?'}
-          </p>
-        </div>
+        <Logo />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button
-            onClick={onDecideTogether}
-            style={{
-              height: 44, borderRadius: 14,
-              background: '#FFF4EE', border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 6, padding: '0 14px',
-              boxShadow: '0 2px 10px rgba(0,0,0,0.06)',
-            }}
-          >
-            <span style={{ fontSize: 16 }}>👫</span>
-            <span style={{ fontFamily: 'Outfit', fontSize: 13, fontWeight: 600, color: '#E8713A' }}>Together</span>
-          </button>
-          <button
-            onClick={onFilterOpen}
-          style={{
+          {/* Undo */}
+          {canUndo && (
+            <button onClick={onUndo} style={{
+              width: 44, height: 44, borderRadius: 14,
+              background: '#fff', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
+            }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <path d="M9 14L4 9l5-5" stroke="#1A1A1A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M4 9h10.5a5.5 5.5 0 000-11H11" stroke="#1A1A1A" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
+          {/* Filter */}
+          <button onClick={onFilterOpen} style={{
             position: 'relative',
             width: 44, height: 44, borderRadius: 14,
             background: activeFilterCount > 0 ? '#E8713A' : '#fff',
             border: 'none', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
-          }}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-            <path d="M3 6h18M7 12h10M11 18h2"
-              stroke={activeFilterCount > 0 ? '#fff' : '#1A1A1A'}
-              strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          {activeFilterCount > 0 && (
-            <div style={{
-              position: 'absolute', top: -4, right: -4,
-              width: 18, height: 18, borderRadius: '50%',
-              background: '#fff', border: '2px solid #E8713A',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <span style={{ fontFamily: 'Outfit', fontSize: 10, fontWeight: 700, color: '#E8713A' }}>
-                {activeFilterCount}
-              </span>
-            </div>
-          )}
+          }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+              <path d="M3 6h18M7 12h10M11 18h2"
+                stroke={activeFilterCount > 0 ? '#fff' : '#1A1A1A'}
+                strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            {activeFilterCount > 0 && (
+              <div style={{
+                position: 'absolute', top: -4, right: -4,
+                width: 18, height: 18, borderRadius: '50%',
+                background: '#fff', border: '2px solid #E8713A',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <span style={{ fontFamily: 'Outfit', fontSize: 10, fontWeight: 700, color: '#E8713A' }}>
+                  {activeFilterCount}
+                </span>
+              </div>
+            )}
           </button>
         </div>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ padding: '0 24px 8px', flexShrink: 0 }}>
+        <div style={{ height: 3, background: '#F0EBE3', borderRadius: 2, overflow: 'hidden' }}>
+          <div style={{
+            height: '100%', borderRadius: 2,
+            background: '#E8713A',
+            width: `${(deckIndex / SESSION_SIZE) * 100}%`,
+            transition: 'width 0.3s ease',
+          }} />
+        </div>
+        <p style={{ fontFamily: 'Outfit', fontSize: 11, color: '#8C8C8C', marginTop: 4 }}>
+          {deckIndex} of {SESSION_SIZE}
+        </p>
       </div>
 
       {/* Card stack */}
@@ -248,15 +347,16 @@ function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDec
           <div style={{
             position: 'absolute', inset: 0,
             display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: 12,
+            alignItems: 'center', justifyContent: 'center', gap: 12, padding: 32,
+            textAlign: 'center',
           }}>
-            <span style={{ fontSize: 56 }}>😢</span>
-            <h3 style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 18, color: '#1A1A1A' }}>
-              No meals match your filters
-            </h3>
-            <p style={{ fontFamily: 'Outfit', fontSize: 14, color: '#8C8C8C' }}>Try adjusting your filters</p>
+            <span style={{ fontSize: 48 }}>😢</span>
+            <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 16, color: '#1A1A1A' }}>
+              Your filters are too strict. Even I can't work with this.
+            </p>
+            <button className="btn-secondary" onClick={() => {}}>Loosen filters</button>
           </div>
-        ) : meals.length === 0 ? null : (
+        ) : (
           [...meals].reverse().map((meal, reversedIdx) => {
             const stackIndex = meals.length - 1 - reversedIdx
             return (
@@ -267,6 +367,7 @@ function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDec
                 isTop={stackIndex === 0}
                 onSwipe={onSwipe}
                 onTap={onTap}
+                showBurbChip={showBurbChip && stackIndex === 0}
               />
             )
           })
@@ -275,10 +376,7 @@ function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDec
 
       {/* Swipe hint */}
       {meals.length > 0 && (
-        <div style={{
-          display: 'flex', justifyContent: 'center', gap: 32,
-          padding: '8px 0', flexShrink: 0,
-        }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 40, padding: '8px 0', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 18 }}>👈</span>
             <span style={{ fontFamily: 'Outfit', fontSize: 12, color: '#E84040', fontWeight: 500 }}>NAH</span>
@@ -290,45 +388,47 @@ function HomeScreen({ meals, picks, filters, onSwipe, onTap, onFilterOpen, onDec
         </div>
       )}
 
-      {/* My Picks */}
-      <div style={{ padding: '8px 0 12px', flexShrink: 0 }}>
-        <div style={{ padding: '0 24px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <p style={{ fontFamily: 'Outfit', fontSize: 13, fontWeight: 600, color: '#1A1A1A' }}>
-            My Picks
-          </p>
-          <span style={{ fontFamily: 'Outfit', fontSize: 12, color: '#8C8C8C' }}>
-            {picks.length} meal{picks.length !== 1 ? 's' : ''}
-          </span>
+      <div style={{ height: 8, flexShrink: 0 }} />
+    </div>
+  )
+}
+
+// ── Day prompt ───────────────────────────────────────────────────────────────
+function DayPrompt({ onFresh, onYesterday }) {
+  return (
+    <>
+      <div className="backdrop" style={{ zIndex: 80 }} />
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 90,
+        background: '#fff', borderRadius: '24px 24px 0 0',
+        padding: '24px 24px 48px',
+        animation: 'slideUp 0.35s cubic-bezier(0.16,1,0.3,1)',
+        display: 'flex', flexDirection: 'column', gap: 20,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: '#E8E0D8' }} />
         </div>
-        <div style={{
-          display: 'flex', gap: 10, overflowX: 'auto',
-          padding: '4px 24px',
-        }}>
-          {picks.length === 0 ? (
-            <div style={{
-              height: 70, display: 'flex', alignItems: 'center',
-              padding: '0 4px',
-            }}>
-              <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C' }}>
-                Swipe right on meals you like ✨
-              </p>
-            </div>
-          ) : picks.map((meal, i) => (
-            <div key={`${meal.id}-${i}`} style={{
-              flexShrink: 0,
-              width: 70, height: 70,
-              borderRadius: 16,
-              background: `linear-gradient(160deg, ${meal.colors.from} 0%, ${meal.colors.to} 100%)`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 28,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
-            }}>
-              {meal.emoji}
-            </div>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 14,
+            background: 'linear-gradient(135deg, #E8713A, #F5A07A)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0,
+          }}>🍽️</div>
+          <div>
+            <p style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 16, color: '#1A1A1A' }}>
+              New day, new cravings?
+            </p>
+            <p style={{ fontFamily: 'Outfit', fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>
+              Your last session was yesterday.
+            </p>
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button className="btn-primary" onClick={onFresh}>Start fresh</button>
+          <button className="btn-secondary" onClick={onYesterday}>See yesterday's picks</button>
         </div>
       </div>
-    </div>
+    </>
   )
 }
 
@@ -343,7 +443,7 @@ function Logo() {
       }}>
         <span style={{ fontSize: 16 }}>🍽️</span>
       </div>
-      <span style={{ fontFamily: 'Outfit', fontWeight: 600, fontSize: 22, color: '#1A1A1A' }}>
+      <span style={{ fontFamily: 'Outfit', fontWeight: 700, fontSize: 22, color: '#1A1A1A' }}>
         Lessit
       </span>
     </div>
